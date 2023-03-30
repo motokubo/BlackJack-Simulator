@@ -5,13 +5,14 @@ import numpy as np
 import scipy.stats as stats
 import pylab as pl
 import matplotlib.pyplot as plt
+import copy
 
 from importer.StrategyImporter import StrategyImporter
 
 
 GAMES = 20000
-SHOE_SIZE = 6
-SHOE_PENETRATION = 0.25
+SHOE_SIZE = 8
+SHOE_PENETRATION = 0.5
 BET_SPREAD = 20.0
 
 DECK_SIZE = 52.0
@@ -22,6 +23,7 @@ BLACKJACK_RULES = {
     'triple7': False,  # Count 3x7 as a blackjack
 }
 
+STRATEGY = ""
 HARD_STRATEGY = {}
 SOFT_STRATEGY = {}
 PAIR_STRATEGY = {}
@@ -96,6 +98,26 @@ class Shoe(object):
 
         self.do_count(card)
         return card
+
+    def deal_card(self, card):
+        """
+        Returns:    The next card off the shoe. If the shoe penetration is reached,
+                    the shoe gets reshuffled.
+        """
+        if self.shoe_penetration() < SHOE_PENETRATION:
+            self.reshuffle = True
+
+        assert self.ideal_count[card.name] > 0, "Either a cheater or a bug!"
+        self.ideal_count[card.name] -= 1
+
+        self.do_count(card)
+        return card
+
+    def total_card(self):
+        total_cards = 0
+        for card in CARDS:
+            total_cards += self.ideal_count[card]
+        return total_cards
 
     def do_count(self, card):
         """
@@ -255,10 +277,242 @@ class Player(object):
         self.hands = [new_hand]
         self.dealer_hand = new_dealer_hand
 
-    def play(self, shoe):
+    def play_simulation(self, shoe, dealer):
         for hand in self.hands:
             # print "Playing Hand: %s" % hand
-            self.play_hand(hand, shoe)
+            self.play_hand_simulation_percentage(hand, shoe, dealer)
+
+    
+
+    def translate_card(self, card):
+        if card == "1":
+            card = "Ace"
+        elif card == "2":
+            card = "Two"
+        elif card == "3":
+            card = "Three"
+        elif card == "4":
+            card = "Four"
+        elif card == "5":
+            card = "Five"
+        elif card == "6":
+            card = "Six"
+        elif card == "7":
+            card = "Seven"
+        elif card == "8":
+            card = "Eight"
+        elif card == "9":
+            card = "Nine"
+        elif card == "10":
+            card = "Ten"
+        elif card == "j":
+            card = "Jack"
+        elif card == "q":
+            card = "Queen"
+        elif card == "k":
+            card = "King"
+        return card
+
+    def play_hand_simulation_percentage(self, hand, shoe, dealer):
+        while not hand.busted() and not hand.blackjack():
+            if hand.soft():
+                flag = SOFT_STRATEGY[hand.value][self.dealer_hand.cards[0].name]
+            elif hand.splitable():
+                flag = PAIR_STRATEGY[hand.value][self.dealer_hand.cards[0].name]
+            else:
+                flag = HARD_STRATEGY[hand.value][self.dealer_hand.cards[0].name]
+
+            if flag == 'D':
+                if hand.length() == 2:
+                    print("Double Down")
+                    hand.doubled = True
+                    player_card = self.translate_card(input("Card from double\n"))
+                    self.hit_card(hand, shoe, Card(player_card, CARDS[player_card]))
+                    break
+                else:
+                    flag = 'H'
+
+            if flag == 'P':
+                print("Split")
+                self.split_simulation(hand, shoe)
+                
+            self.player_possibilities = {"17": 0.0, "18": 0.0, "19": 0.0, "20": 0.0, "21": 0.0, "Busted": 0.0}
+            self.dealer_possibilities = {"17": 0.0, "18": 0.0, "19": 0.0, "20": 0.0, "21": 0.0, "Busted": 0.0}
+            self.calculate_percentage(dealer.hand, shoe, self.dealer_possibilities)
+            self.calculate_percentage(hand, shoe, self.player_possibilities)
+            self.bust_chance, self.not_bust_chance = self.player_percentage_bust(hand, shoe)
+            winning_chance_hit, winning_chance_stand = self.winning_chance_calc(hand)
+            print("Win hit chance: " + str(winning_chance_hit))
+            print("Win stand chance: " + str(winning_chance_stand))
+            if winning_chance_hit > winning_chance_stand:
+                print("Hit")
+                
+                player_card = self.translate_card(input("Card from hit\n"))
+                self.hit_card(hand, shoe, Card(player_card, CARDS[player_card]))
+            else :
+                print("Stand")
+                break
+
+    def split_simulation(self, hand, shoe):
+        self.hands.append(hand.split())
+        # print "Splitted %s" % hand
+        self.play_hand_simulation_percentage(hand, shoe)
+
+    def play(self, shoe, dealer):
+        for hand in self.hands:
+            # print "Playing Hand: %s" % hand
+            if STRATEGY=="CalculatePercentage":
+                self.play_hand_percentage(hand, shoe, dealer)
+            else:
+                self.play_hand(hand, shoe)
+
+    def play_hand_percentage(self, hand, shoe, dealer):
+        if hand.length() < 2:
+            if hand.cards[0].name == "Ace":
+                hand.cards[0].value = 11
+            self.hit(hand, shoe)
+
+        while not hand.busted() and not hand.blackjack():
+            if hand.soft():
+                flag = SOFT_STRATEGY[hand.value][self.dealer_hand.cards[0].name]
+            elif hand.splitable():
+                flag = PAIR_STRATEGY[hand.value][self.dealer_hand.cards[0].name]
+            else:
+                flag = HARD_STRATEGY[hand.value][self.dealer_hand.cards[0].name]
+
+            if flag == 'D':
+                if hand.length() == 2:
+                    #print("Double Down")
+                    hand.doubled = True
+                    self.hit(hand, shoe)
+                    break
+                else:
+                    flag = 'H'
+
+            if flag == 'Sr':
+                if hand.length() == 2:
+                    #print("Surrender")
+                    hand.surrender = True
+                    break
+                else:
+                    flag = 'H'
+
+            if flag == 'P':
+                #print("Split")
+                self.split(hand, shoe)
+                
+            self.player_possibilities = {"17": 0.0, "18": 0.0, "19": 0.0, "20": 0.0, "21": 0.0, "Busted": 0.0}
+            self.dealer_possibilities = {"17": 0.0, "18": 0.0, "19": 0.0, "20": 0.0, "21": 0.0, "Busted": 0.0}
+            self.calculate_percentage(dealer.hand, shoe, self.dealer_possibilities)
+            self.calculate_percentage(hand, shoe, self.player_possibilities)
+            self.bust_chance, self.not_bust_chance = self.player_percentage_bust(hand, shoe)
+            #print(self.bust_chance)
+            #print("dealer_possibilities")
+            #print(self.dealer_possibilities)
+            #print(self.dealer_possibilities["17"] + self.dealer_possibilities["18"] + self.dealer_possibilities["19"] + self.dealer_possibilities["20"] + self.dealer_possibilities["21"] + self.dealer_possibilities["Busted"])
+            #print("player_possibilities")
+            #print(self.player_possibilities)
+            #print(self.player_possibilities["17"] + self.player_possibilities["18"] + self.player_possibilities["19"] + self.player_possibilities["20"] + self.player_possibilities["21"] + self.player_possibilities["Busted"])
+            winning_chance_hit, winning_chance_stand = self.winning_chance_calc(hand)
+
+            #print("winning_chance_hit:")
+            #print(winning_chance_hit)
+            #print("winning_chance_stand:")
+            #print(winning_chance_stand)
+            
+            if winning_chance_hit > winning_chance_stand:
+                #print("Hit")
+                self.hit(hand, shoe)
+            else :
+                #print("Stand")
+                break
+
+    def winning_chance_calc(self, hand):
+        winning_chance_hit = 0.0
+        winning_chance_stand = 0.0
+        #losing_chance_hit = 0.0
+        #losing_chance_stand = 0.0
+        
+        if hand.value < 17:
+            winning_chance_stand = self.dealer_possibilities["Busted"]
+            #losing_chance_stand = self.dealer_possibilities["17"] + self.dealer_possibilities["18"] + self.dealer_possibilities["19"] + self.dealer_possibilities["20"] + self.dealer_possibilities["21"]
+        elif hand.value == 17:
+            #losing_chance_stand = (self.dealer_possibilities["17"]/2) + self.dealer_possibilities["18"] + self.dealer_possibilities["19"] + self.dealer_possibilities["20"] + self.dealer_possibilities["21"]
+            winning_chance_stand = (self.dealer_possibilities["17"]/2) + self.dealer_possibilities["Busted"]
+        elif hand.value == 18:
+            #losing_chance_stand = (self.dealer_possibilities["18"]/2) + self.dealer_possibilities["19"] + self.dealer_possibilities["20"] + self.dealer_possibilities["21"]
+            winning_chance_stand = (self.dealer_possibilities["18"]/2) + self.dealer_possibilities["17"] + self.dealer_possibilities["Busted"]
+        elif hand.value == 19:
+            #losing_chance_stand = (self.dealer_possibilities["19"]/2) + self.dealer_possibilities["20"] + self.dealer_possibilities["21"]
+            winning_chance_stand = (self.dealer_possibilities["19"]/2) + self.dealer_possibilities["17"] + self.dealer_possibilities["18"] + self.dealer_possibilities["Busted"]
+        elif hand.value == 20:
+            #losing_chance_stand = (self.dealer_possibilities["20"]/2) + self.dealer_possibilities["21"]
+            winning_chance_stand = (self.dealer_possibilities["20"]/2) + self.dealer_possibilities["17"] + self.dealer_possibilities["18"] + self.dealer_possibilities["19"] + self.dealer_possibilities["Busted"]
+        elif hand.value == 21:            
+            #losing_chance_stand = (self.dealer_possibilities["21"]/2)
+            winning_chance_stand = (self.dealer_possibilities["21"]/2) + self.dealer_possibilities["17"] + self.dealer_possibilities["18"] + self.dealer_possibilities["19"] + self.dealer_possibilities["20"] + self.dealer_possibilities["Busted"]
+
+        winning_chance_hit += self.player_possibilities["17"] * (self.dealer_possibilities["17"]/2 + self.dealer_possibilities["Busted"])
+        winning_chance_hit += self.player_possibilities["18"] * (self.dealer_possibilities["18"]/2 + self.dealer_possibilities["17"] + self.dealer_possibilities["Busted"])
+        winning_chance_hit += self.player_possibilities["19"] * (self.dealer_possibilities["19"]/2 + self.dealer_possibilities["18"] + self.dealer_possibilities["17"] + self.dealer_possibilities["Busted"])
+        winning_chance_hit += self.player_possibilities["20"] * (self.dealer_possibilities["20"]/2 + self.dealer_possibilities["19"] + self.dealer_possibilities["18"] + self.dealer_possibilities["17"] + self.dealer_possibilities["Busted"])
+        winning_chance_hit += self.player_possibilities["21"] * (self.dealer_possibilities["21"]/2 + self.dealer_possibilities["20"] + self.dealer_possibilities["19"] + self.dealer_possibilities["18"] + self.dealer_possibilities["17"] + self.dealer_possibilities["Busted"])
+
+        #losing_chance_hit += self.player_possibilities["Busted"]
+        #losing_chance_hit += self.player_possibilities["21"] * (self.dealer_possibilities["21"]/2)
+        #losing_chance_hit += self.player_possibilities["20"] * (self.dealer_possibilities["20"]/2 + self.dealer_possibilities["21"])
+        #losing_chance_hit += self.player_possibilities["19"] * (self.dealer_possibilities["19"]/2 + self.dealer_possibilities["20"] + self.dealer_possibilities["21"])
+        #losing_chance_hit += self.player_possibilities["18"] * (self.dealer_possibilities["18"]/2 + self.dealer_possibilities["19"] + self.dealer_possibilities["20"] + self.dealer_possibilities["21"])
+        #losing_chance_hit += self.player_possibilities["17"] * (self.dealer_possibilities["17"]/2 + self.dealer_possibilities["18"] + self.dealer_possibilities["19"] + self.dealer_possibilities["20"] + self.dealer_possibilities["21"])
+
+        #print("losing_chance_stand")
+        #print(losing_chance_stand)
+        #print("losing_chance_hit")
+        #print(losing_chance_hit)
+
+        return winning_chance_hit, winning_chance_stand
+
+    def player_percentage_bust(self, hand, shoe):
+        not_bust_chance = 0.0
+        bust_chance = 0.0
+        for card in CARDS:
+            if shoe.ideal_count[card]>0:
+                copy_shoe = copy.deepcopy(shoe)
+                copy_hand = copy.deepcopy(hand)
+                self.hit_card(copy_hand, copy_shoe, Card(card, CARDS[card]))
+                if copy_hand.value > 21:
+                    bust_chance += shoe.ideal_count[card]/shoe.total_card()
+                else :
+                    not_bust_chance += shoe.ideal_count[card]/shoe.total_card()
+
+        #print("Not Bust Chance = " + str(not_bust_chance))
+        #print("Bust Chance = " + str(bust_chance))
+        return bust_chance, not_bust_chance
+
+    def calculate_percentage(self, hand, shoe, possibilities, possibility=1):
+        #print("Possibilities")
+        #print(possibilities)
+        for card in CARDS:
+            if shoe.ideal_count[card]>0:
+                copy_shoe = copy.deepcopy(shoe)
+                copy_hand = copy.deepcopy(hand)
+                new_possibility = possibility * copy_shoe.ideal_count[card]/copy_shoe.total_card()
+                self.hit_card(copy_hand, copy_shoe, Card(card, CARDS[card]))
+                
+                if copy_hand.value == 17:
+                    possibilities["17"] += new_possibility
+                elif copy_hand.value == 18:
+                    possibilities["18"] += new_possibility
+                elif copy_hand.value == 19:
+                    possibilities["19"] += new_possibility
+                elif copy_hand.value == 20:
+                    possibilities["20"] += new_possibility
+                elif copy_hand.value == 21:
+                    possibilities["21"] += new_possibility
+                elif copy_hand.value > 21:
+                    possibilities["Busted"] += new_possibility
+                else:
+                    self.calculate_percentage(copy_hand, copy_shoe, possibilities, new_possibility)
 
     def play_hand(self, hand, shoe):
         if hand.length() < 2:
@@ -299,6 +553,11 @@ class Player(object):
 
             if flag == 'S':
                 break
+
+    def hit_card(self, hand, shoe, card):
+        c = shoe.deal_card(card)
+        hand.add_card(c)
+        # print "Hitted: %s" % c
 
     def hit(self, hand, shoe):
         c = shoe.deal()
@@ -377,6 +636,7 @@ class Game(object):
         self.stake = 1.0
         self.player = Player()
         self.dealer = Dealer()
+        self.count_higher_bet = 0
 
     def get_hand_winnings(self, hand):
         win = 0.0
@@ -420,9 +680,97 @@ class Game(object):
 
         return win, bet
 
+    def play_round_simulation(self):
+        if self.shoe.truecount() > 6:
+            self.stake = BET_SPREAD
+            self.count_higher_bet+=1
+        else:
+            self.stake = 1.0
+
+        print("Bet:" + str(self.stake))
+
+        print("End round = e | Calculate = c | Ace = 1 | Jack = j | Queen = q | King = k | 2, 3, 4, 5, 6, 7, 8, 9")
+        dealer_card = input("Input Dealer's card:")
+        dealer_card = self.translate_card(dealer_card)
+        dealer_hand = Hand([self.shoe.deal_card(Card(dealer_card, CARDS[dealer_card]))])
+        self.dealer.set_hand(dealer_hand)
+        print(self.dealer.hand)
+
+        print("Input Player's card")
+        player_card1 = self.translate_card(input())
+        player_card2 = self.translate_card(input())
+        player_hand = Hand([self.shoe.deal_card(Card(player_card1, CARDS[player_card1])), self.shoe.deal_card(Card(player_card2, CARDS[player_card2]))])
+        self.player.set_hands(player_hand, dealer_hand)
+        #print(self.player.hands)
+
+        self.blackjackSecurity = False
+        if self.dealer.hand.cards[0].name == "Ace":
+            #print("----------------------")
+            #print("Dealer hand:")
+            #print(dealer_hand.__str__())
+            winning_chances = self.check_insurance()
+            print("Insurance winning chances:")
+            print(winning_chances)
+            if winning_chances >= 0.5:
+                self.blackjackSecurity = True
+                print("---------------")
+                print("CALL INSURANCE")
+                print("---------------")
+
+        print("Input other's card")
+        while True:
+            other_card = input()
+            if other_card == "e":
+                break
+            elif other_card == "c":
+                self.player.play_simulation(self.shoe, self.dealer)
+                print("Input Dealer's draw card:")
+                while self.dealer.hand.value < 17:
+                    dealer_card = self.translate_card(input())
+                    self.dealer.hand.add_card(self.shoe.deal_card(Card(dealer_card, CARDS[dealer_card])))
+            else:
+                other_card = self.translate_card(other_card)
+                self.shoe.deal_card(Card(other_card, CARDS[other_card]))
+
+                
+        for hand in self.player.hands:
+            win, bet = self.get_hand_winnings(hand)
+            self.money += win
+            self.bet += bet
+
+    def translate_card(self, card):
+        if card == "1":
+            card = "Ace"
+        elif card == "2":
+            card = "Two"
+        elif card == "3":
+            card = "Three"
+        elif card == "4":
+            card = "Four"
+        elif card == "5":
+            card = "Five"
+        elif card == "6":
+            card = "Six"
+        elif card == "7":
+            card = "Seven"
+        elif card == "8":
+            card = "Eight"
+        elif card == "9":
+            card = "Nine"
+        elif card == "10":
+            card = "Ten"
+        elif card == "j":
+            card = "Jack"
+        elif card == "q":
+            card = "Queen"
+        elif card == "k":
+            card = "King"
+        return card
+
     def play_round(self):
         if self.shoe.truecount() > 6:
             self.stake = BET_SPREAD
+            self.count_higher_bet+=1
         else:
             self.stake = 1.0
 
@@ -433,10 +781,24 @@ class Game(object):
         # print "Dealer Hand: %s" % self.dealer.hand
         # print "Player Hand: %s\n" % self.player.hands[0]
 
-        self.player.play(self.shoe)
-        self.dealer.play(self.shoe)
+        # To do Insurance
+        self.blackjackSecurity = False
+        if self.dealer.hand.cards[0].name == "Ace":
+            #print("----------------------")
+            #print("Dealer hand:")
+            #print(dealer_hand.__str__())
+            winning_chances = self.check_insurance()
+            #print("winning_chances")
+            #print(winning_chances)
+            if winning_chances >= 0.5:
+                self.blackjackSecurity = True
+                print("---------------")
+                print("CALL INSURANCE")
+                print("---------------")
 
-        # print ""
+        
+        self.player.play(self.shoe, self.dealer)
+        self.dealer.play(self.shoe)
 
         for hand in self.player.hands:
             win, bet = self.get_hand_winnings(hand)
@@ -446,33 +808,67 @@ class Game(object):
 
         # print "Dealer Hand: %s (%d)" % (self.dealer.hand, self.dealer.hand.value)
 
+    def check_insurance(self):
+        winnable = 0
+        total = 0
+        for card in CARDS:
+            #print(card)
+            #print(type(card))
+            if card=="Ten" or card=="Jack" or card=="Queen" or card=="King":
+                winnable += self.shoe.ideal_count[card]
+
+            total += self.shoe.ideal_count[card]
+
+        return winnable/total
+
     def get_money(self):
         return self.money
+
+    def get_count_higher_bet(self):
+        return self.count_higher_bet
 
     def get_bet(self):
         return self.bet
 
-
 if __name__ == "__main__":
     importer = StrategyImporter(sys.argv[1])
+    STRATEGY=sys.argv[2]
+    simulation=sys.argv[3]
     HARD_STRATEGY, SOFT_STRATEGY, PAIR_STRATEGY = importer.import_player_strategy()
 
     moneys = []
     bets = []
     countings = []
     nb_hands = 0
+    accumulate_win=0.0
+    max_drawdown=0.0
+    max_win=0.0
+    count_higher_bet=0
     for g in range(GAMES):
         game = Game()
-        while not game.shoe.reshuffle:
-            # print '%s GAME no. %d %s' % (20 * '#', i + 1, 20 * '#')
-            game.play_round()
-            nb_hands += 1
+
+        if simulation == "simulation":
+            while not game.shoe.reshuffle:
+                # print '%s GAME no. %d %s' % (20 * '#', i + 1, 20 * '#')
+                game.play_round_simulation()
+                nb_hands += 1
+        else:
+            while not game.shoe.reshuffle:
+                # print '%s GAME no. %d %s' % (20 * '#', i + 1, 20 * '#')
+                game.play_round()
+                nb_hands += 1
 
         moneys.append(game.get_money())
         bets.append(game.get_bet())
         countings += game.shoe.count_history
+        accumulate_win+=game.get_money()
+        count_higher_bet+=game.get_count_higher_bet()
+        if max_drawdown>accumulate_win:
+            max_drawdown = accumulate_win
+        elif max_win<accumulate_win:
+            max_win=accumulate_win
 
-        print("WIN for Game no. %d: %s (%s bet)" % (g + 1, "{0:.2f}".format(game.get_money()), "{0:.2f}".format(game.get_bet())))
+        print("WIN for Game no. %d: %s (%s bet) (%s accumulate win) (%s times higher bets)" % (g + 1, "{0:.2f}".format(game.get_money()), "{0:.2f}".format(game.get_bet()), accumulate_win, count_higher_bet))
 
     sume = 0.0
     total_bet = 0.0
@@ -481,17 +877,19 @@ if __name__ == "__main__":
     for value in bets:
         total_bet += value
 
-    print "\n%d hands overall, %0.2f hands per game on average" % (nb_hands, float(nb_hands) / GAMES)
-    print "%0.2f total bet" % total_bet
+    print("\n%d hands overall, %0.2f hands per game on average" % (nb_hands, float(nb_hands) / GAMES))
+    print("%0.2f total bet" % total_bet)
     print("Overall winnings: {} (edge = {} %)".format("{0:.2f}".format(sume), "{0:.3f}".format(100.0*sume/total_bet)))
+    print("%0.2f max drawdown" % max_drawdown)
+    print("%0.2f max win" % max_win)
 
     moneys = sorted(moneys)
     fit = stats.norm.pdf(moneys, np.mean(moneys), np.std(moneys))  # this is a fitting indeed
     pl.plot(moneys, fit, '-o')
-    pl.hist(moneys, normed=True)
-    pl.show()
+    pl.hist(moneys)
+    #pl.show()
 
     plt.ylabel('count')
     plt.plot(countings, label='x')
     plt.legend()
-    plt.show()
+    #plt.show()

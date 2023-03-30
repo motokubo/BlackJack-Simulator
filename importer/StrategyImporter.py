@@ -30,4 +30,10 @@ class StrategyImporter(object):
 					self.pair_strategy[pair] = row
 					pair -= 2
 
+		#print("HARD")
+		#print(self.hard_strategy)
+		#print("SOFT")
+		#print(self.soft_strategy)
+		#print("PAIR")
+		#print(self.pair_strategy)
 		return self.hard_strategy, self.soft_strategy, self.pair_strategy
