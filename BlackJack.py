@@ -6,6 +6,9 @@ import scipy.stats as stats
 import pylab as pl
 import matplotlib.pyplot as plt
 import copy
+import time
+import sqlite3
+from sqlite3 import Error
 
 from importer.StrategyImporter import StrategyImporter
 
@@ -14,6 +17,10 @@ GAMES = 20000
 SHOE_SIZE = 8
 SHOE_PENETRATION = 0.5
 BET_SPREAD = 20.0
+BET_SPREAD_6 = 10.0
+BET_SPREAD_5 = 5.0
+BET_SPREAD_4 = 3.0
+BET_SPREAD_3 = 2.0
 
 DECK_SIZE = 52.0
 CARDS = {"Ace": 11, "Two": 2, "Three": 3, "Four": 4, "Five": 5, "Six": 6, "Seven": 7, "Eight": 8, "Nine": 9, "Ten": 10, "Jack": 10, "Queen": 10, "King": 10}
@@ -28,6 +35,73 @@ HARD_STRATEGY = {}
 SOFT_STRATEGY = {}
 PAIR_STRATEGY = {}
 
+DATABASE = ""
+COUNT_DATABASE = 0
+
+class Database:
+    def __init__(self, path):
+        self.count_database_searchs = 0
+        self.create_connection(path)
+        self.create_tables()
+
+    def create_connection(self, path):
+        try:
+            self.connection = sqlite3.connect(path)
+            #print("Connection to SQLite DB successful")
+        except Error as e:
+            print(f"The error '{e}' occurred")
+
+    def execute_query(self, query):
+        cursor = self.connection.cursor()
+        try:
+            cursor.execute(query)
+            self.connection.commit()
+            #print("Query executed successfully")
+        except Error as e:
+            print(f"The error '{e}' occurred")
+        
+    def select_table(self, query, arguments):
+        cur = self.connection.cursor()
+        #print("Select on table")
+        cur.execute(query, arguments)
+        self.connection.commit()
+        return cur.fetchall()
+
+    def create_tables(self):
+        cur = self.connection.cursor()
+        #print("Creating tables")
+
+        cur.execute(
+            """CREATE TABLE IF NOT EXISTS BLACKJACK_CHANCES(
+                id integer PRIMARY KEY AUTOINCREMENT,
+                dealer text NOT NULL,
+                Ace integer NOT NULL,
+                Two integer NOT NULL,
+                Three integer NOT NULL,
+                Four integer NOT NULL,
+                Five integer NOT NULL,
+                Six integer NOT NULL,
+                Seven integer NOT NULL,
+                Eight integer NOT NULL,
+                Nine integer NOT NULL,
+                Ten integer NOT NULL,
+                Seventeen real NOT NULL,
+                Eightteen real NOT NULL,
+                Nineteen real NOT NULL,
+                Twenty real NOT NULL,
+                Twentyone real NOT NULL,
+                Busted real NOT NULL,
+                Winning_chance_hit real, 
+                Winning_chance_stand real
+                );""")
+
+        self.connection.commit()
+        
+    def insert_update_table(self, query, arguments):
+        cur = self.connection.cursor()
+        cur.execute(query, arguments)
+        self.connection.commit()
+        #self.logger.info("Insert/Update on table successfully")
 
 class Card(object):
     """
@@ -282,8 +356,6 @@ class Player(object):
             # print "Playing Hand: %s" % hand
             self.play_hand_simulation_percentage(hand, shoe, dealer)
 
-    
-
     def translate_card(self, card):
         if card == "1":
             card = "Ace"
@@ -315,6 +387,7 @@ class Player(object):
 
     def play_hand_simulation_percentage(self, hand, shoe, dealer):
         while not hand.busted() and not hand.blackjack():
+            self.splitted = False
             if hand.soft():
                 flag = SOFT_STRATEGY[hand.value][self.dealer_hand.cards[0].name]
             elif hand.splitable():
@@ -335,28 +408,58 @@ class Player(object):
             if flag == 'P':
                 print("Split")
                 self.split_simulation(hand, shoe)
-                
-            self.player_possibilities = {"17": 0.0, "18": 0.0, "19": 0.0, "20": 0.0, "21": 0.0, "Busted": 0.0}
-            self.dealer_possibilities = {"17": 0.0, "18": 0.0, "19": 0.0, "20": 0.0, "21": 0.0, "Busted": 0.0}
-            self.calculate_percentage(dealer.hand, shoe, self.dealer_possibilities)
-            self.calculate_percentage(hand, shoe, self.player_possibilities)
-            self.bust_chance, self.not_bust_chance = self.player_percentage_bust(hand, shoe)
-            winning_chance_hit, winning_chance_stand = self.winning_chance_calc(hand)
-            print("Win hit chance: " + str(winning_chance_hit))
-            print("Win stand chance: " + str(winning_chance_stand))
-            if winning_chance_hit > winning_chance_stand:
-                print("Hit")
-                
-                player_card = self.translate_card(input("Card from hit\n"))
-                self.hit_card(hand, shoe, Card(player_card, CARDS[player_card]))
-            else :
-                print("Stand")
-                break
+                self.splitted = True
+            
+            if not self.splitted:
+                rows = DATABASE.select_table("""SELECT * FROM BLACKJACK_CHANCES WHERE dealer=? AND Ace=? AND Two=? AND Three=? AND Four=? AND Five=? AND Six=?
+                    AND Seven=? AND Eight=? AND Nine=? AND Ten=?""", 
+                    (dealer.hand.cards[0].name, shoe.ideal_count["Ace"], shoe.ideal_count["Two"], shoe.ideal_count["Three"],
+                    shoe.ideal_count["Four"], shoe.ideal_count["Five"], shoe.ideal_count["Six"], shoe.ideal_count["Seven"],
+                    shoe.ideal_count["Eight"], shoe.ideal_count["Nine"], shoe.ideal_count["Ten"] + shoe.ideal_count["Jack"] + shoe.ideal_count["Queen"] + shoe.ideal_count["King"]))
+
+                winning_chance_hit = 0.0
+                winning_chance_stand = 0.0
+                if rows:
+                    print("Chances already in database")
+                    DATABASE.count_database_searchs += 1
+                    winning_chance_hit = rows[0][18]
+                    winning_chance_stand = rows[0][19]
+                else:
+                    self.player_possibilities = {"17": 0.0, "18": 0.0, "19": 0.0, "20": 0.0, "21": 0.0, "Busted": 0.0}
+                    self.dealer_possibilities = {"17": 0.0, "18": 0.0, "19": 0.0, "20": 0.0, "21": 0.0, "Busted": 0.0}
+                    self.calculate_percentage(dealer.hand, shoe, self.dealer_possibilities)
+                    self.calculate_percentage(hand, shoe, self.player_possibilities)
+                    self.bust_chance, self.not_bust_chance = self.player_percentage_bust(hand, shoe)
+                    winning_chance_hit, winning_chance_stand = self.winning_chance_calc(hand)
+                    DATABASE.insert_update_table("""INSERT INTO BLACKJACK_CHANCES (
+                        dealer, Ace, Two, Three, Four, Five, Six, Seven, Eight, Nine, Ten, Seventeen, Eightteen, Nineteen, Twenty, Twentyone, Busted, Winning_chance_hit, Winning_chance_stand) 
+                        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""", 
+                        (dealer.hand.cards[0].name, shoe.ideal_count["Ace"], shoe.ideal_count["Two"], shoe.ideal_count["Three"],
+                        shoe.ideal_count["Four"], shoe.ideal_count["Five"], shoe.ideal_count["Six"], shoe.ideal_count["Seven"],
+                        shoe.ideal_count["Eight"], shoe.ideal_count["Nine"], shoe.ideal_count["Ten"] + shoe.ideal_count["Jack"] + shoe.ideal_count["Queen"] + shoe.ideal_count["King"], 
+                        self.dealer_possibilities["17"], self.dealer_possibilities["18"], self.dealer_possibilities["19"], self.dealer_possibilities["20"], 
+                        self.dealer_possibilities["21"], self.dealer_possibilities["Busted"], winning_chance_hit, winning_chance_stand))
+                            
+                print("Win hit chance: " + str(winning_chance_hit))
+                print("Win stand chance: " + str(winning_chance_stand))
+                if winning_chance_hit > winning_chance_stand:
+                    print("Hit")
+                    
+                    player_card = self.translate_card(input("Card from hit\n"))
+                    self.hit_card(hand, shoe, Card(player_card, CARDS[player_card]))
+                else :
+                    print("Stand")
+                    break
 
     def split_simulation(self, hand, shoe):
-        self.hands.append(hand.split())
+        new_hand = hand.split()
+        self.hands.append(new_hand)
         # print "Splitted %s" % hand
-        self.play_hand_simulation_percentage(hand, shoe)
+        player_card = self.translate_card(input("Card from hit\n"))
+        self.hit_card(new_hand, shoe, Card(player_card, CARDS[player_card]))
+        player_card = self.translate_card(input("Card from hit\n"))
+        self.hit_card(hand, shoe, Card(player_card, CARDS[player_card]))
+        self.play_hand_simulation_percentage(new_hand, shoe)
 
     def play(self, shoe, dealer):
         for hand in self.hands:
@@ -373,6 +476,7 @@ class Player(object):
             self.hit(hand, shoe)
 
         while not hand.busted() and not hand.blackjack():
+            self.splitted = False
             if hand.soft():
                 flag = SOFT_STRATEGY[hand.value][self.dealer_hand.cards[0].name]
             elif hand.splitable():
@@ -400,32 +504,67 @@ class Player(object):
             if flag == 'P':
                 #print("Split")
                 self.split(hand, shoe)
-                
-            self.player_possibilities = {"17": 0.0, "18": 0.0, "19": 0.0, "20": 0.0, "21": 0.0, "Busted": 0.0}
-            self.dealer_possibilities = {"17": 0.0, "18": 0.0, "19": 0.0, "20": 0.0, "21": 0.0, "Busted": 0.0}
-            self.calculate_percentage(dealer.hand, shoe, self.dealer_possibilities)
-            self.calculate_percentage(hand, shoe, self.player_possibilities)
-            self.bust_chance, self.not_bust_chance = self.player_percentage_bust(hand, shoe)
-            #print(self.bust_chance)
-            #print("dealer_possibilities")
-            #print(self.dealer_possibilities)
-            #print(self.dealer_possibilities["17"] + self.dealer_possibilities["18"] + self.dealer_possibilities["19"] + self.dealer_possibilities["20"] + self.dealer_possibilities["21"] + self.dealer_possibilities["Busted"])
-            #print("player_possibilities")
-            #print(self.player_possibilities)
-            #print(self.player_possibilities["17"] + self.player_possibilities["18"] + self.player_possibilities["19"] + self.player_possibilities["20"] + self.player_possibilities["21"] + self.player_possibilities["Busted"])
-            winning_chance_hit, winning_chance_stand = self.winning_chance_calc(hand)
+                self.splitted = True
 
-            #print("winning_chance_hit:")
-            #print(winning_chance_hit)
-            #print("winning_chance_stand:")
-            #print(winning_chance_stand)
-            
-            if winning_chance_hit > winning_chance_stand:
-                #print("Hit")
-                self.hit(hand, shoe)
-            else :
-                #print("Stand")
-                break
+            if not self.splitted:
+                self.bust_chance, self.not_bust_chance = self.player_percentage_bust(hand, shoe)
+                #print(self.bust_chance)
+                if self.bust_chance == 0.0:
+                    #print("AutoHit")
+                    self.hit(hand, shoe)
+                else:
+                    rows = DATABASE.select_table("""SELECT * FROM BLACKJACK_CHANCES WHERE dealer=? AND Ace=? AND Two=? AND Three=? AND Four=? AND Five=? AND Six=?
+                        AND Seven=? AND Eight=? AND Nine=? AND Ten=?""", 
+                        (dealer.hand.cards[0].name, shoe.ideal_count["Ace"], shoe.ideal_count["Two"], shoe.ideal_count["Three"],
+                        shoe.ideal_count["Four"], shoe.ideal_count["Five"], shoe.ideal_count["Six"], shoe.ideal_count["Seven"],
+                        shoe.ideal_count["Eight"], shoe.ideal_count["Nine"], shoe.ideal_count["Ten"] + shoe.ideal_count["Jack"] + shoe.ideal_count["Queen"] + shoe.ideal_count["King"]))
+                    winning_chance_hit = 0.0
+                    winning_chance_stand = 0.0
+                    if rows:
+                        print("Chances already in database")
+                        DATABASE.count_database_searchs += 1
+                        winning_chance_hit = rows[0][18]
+                        winning_chance_stand = rows[0][19]
+                    else:
+                        self.player_possibilities = {"17": 0.0, "18": 0.0, "19": 0.0, "20": 0.0, "21": 0.0, "Busted": 0.0}
+                        self.dealer_possibilities = {"17": 0.0, "18": 0.0, "19": 0.0, "20": 0.0, "21": 0.0, "Busted": 0.0}
+                        start = time.time()
+                        self.calculate_percentage(dealer.hand, shoe, self.dealer_possibilities)
+                        end = time.time()
+                        #print("DEALER TIME ELAPSED ----------------------" + str(end - start) + "----------------------")
+                        start = time.time()
+                        self.calculate_percentage(hand, shoe, self.player_possibilities)
+                        end = time.time()
+                        #print("PLAYER TIME ELAPSED ----------------------" + str(end - start) + "----------------------")
+                        #print(self.bust_chance)
+                        #print("dealer_possibilities")
+                        #print(self.dealer_possibilities)
+                        #print(self.dealer_possibilities["17"] + self.dealer_possibilities["18"] + self.dealer_possibilities["19"] + self.dealer_possibilities["20"] + self.dealer_possibilities["21"] + self.dealer_possibilities["Busted"])
+                        #print("player_possibilities")
+                        #print(self.player_possibilities)
+                        #print(self.player_possibilities["17"] + self.player_possibilities["18"] + self.player_possibilities["19"] + self.player_possibilities["20"] + self.player_possibilities["21"] + self.player_possibilities["Busted"])
+                        winning_chance_hit, winning_chance_stand = self.winning_chance_calc(hand)
+                        DATABASE.insert_update_table("""INSERT INTO BLACKJACK_CHANCES (
+                            dealer, Ace, Two, Three, Four, Five, Six, Seven, Eight, Nine, Ten, Seventeen, Eightteen, Nineteen, Twenty, Twentyone, Busted, Winning_chance_hit, Winning_chance_stand) 
+                            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""", 
+                            (dealer.hand.cards[0].name, shoe.ideal_count["Ace"], shoe.ideal_count["Two"], shoe.ideal_count["Three"],
+                            shoe.ideal_count["Four"], shoe.ideal_count["Five"], shoe.ideal_count["Six"], shoe.ideal_count["Seven"],
+                            shoe.ideal_count["Eight"], shoe.ideal_count["Nine"], shoe.ideal_count["Ten"] + shoe.ideal_count["Jack"] + shoe.ideal_count["Queen"] + shoe.ideal_count["King"], 
+                            self.dealer_possibilities["17"], self.dealer_possibilities["18"], self.dealer_possibilities["19"], self.dealer_possibilities["20"], 
+                            self.dealer_possibilities["21"], self.dealer_possibilities["Busted"], winning_chance_hit, winning_chance_stand))
+                        #print("Chances inserted in database")
+
+                        #print("winning_chance_hit:")
+                        #print(winning_chance_hit)
+                        #print("winning_chance_stand:")
+                        #print(winning_chance_stand)
+                    
+                    if winning_chance_hit > winning_chance_stand:
+                        #print("Hit")
+                        self.hit(hand, shoe)
+                    else :
+                        #print("Stand")
+                        break
 
     def winning_chance_calc(self, hand):
         winning_chance_hit = 0.0
@@ -511,6 +650,14 @@ class Player(object):
                     possibilities["21"] += new_possibility
                 elif copy_hand.value > 21:
                     possibilities["Busted"] += new_possibility
+                    start = False
+                    for y in CARDS:
+                        if start:
+                            others_possibility = possibility * copy_shoe.ideal_count[y]/copy_shoe.total_card()
+                            possibilities["Busted"] += others_possibility
+                        if y == card:
+                            start = True
+                    break
                 else:
                     self.calculate_percentage(copy_hand, copy_shoe, possibilities, new_possibility)
 
@@ -681,7 +828,19 @@ class Game(object):
         return win, bet
 
     def play_round_simulation(self):
-        if self.shoe.truecount() > 6:
+        if self.shoe.truecount() == 3:
+            self.stake = BET_SPREAD_3
+            self.count_higher_bet+=1
+        elif self.shoe.truecount() == 4:
+            self.stake = BET_SPREAD_4
+            self.count_higher_bet+=1
+        elif self.shoe.truecount() == 5:
+            self.stake = BET_SPREAD_5
+            self.count_higher_bet+=1
+        elif self.shoe.truecount() == 6:
+            self.stake = BET_SPREAD_6
+            self.count_higher_bet+=1
+        elif self.shoe.truecount() > 6:
             self.stake = BET_SPREAD
             self.count_higher_bet+=1
         else:
@@ -689,7 +848,7 @@ class Game(object):
 
         print("Bet:" + str(self.stake))
 
-        print("End round = e | Calculate = c | Ace = 1 | Jack = j | Queen = q | King = k | 2, 3, 4, 5, 6, 7, 8, 9")
+        print("End round = e | Play round = p | Ace = 1 | Jack = j | Queen = q | King = k | 2, 3, 4, 5, 6, 7, 8, 9")
         dealer_card = input("Input Dealer's card:")
         dealer_card = self.translate_card(dealer_card)
         dealer_hand = Hand([self.shoe.deal_card(Card(dealer_card, CARDS[dealer_card]))])
@@ -722,7 +881,7 @@ class Game(object):
             other_card = input()
             if other_card == "e":
                 break
-            elif other_card == "c":
+            elif other_card == "p":
                 self.player.play_simulation(self.shoe, self.dealer)
                 print("Input Dealer's draw card:")
                 while self.dealer.hand.value < 17:
@@ -768,7 +927,19 @@ class Game(object):
         return card
 
     def play_round(self):
-        if self.shoe.truecount() > 6:
+        if self.shoe.truecount() == 3:
+            self.stake = BET_SPREAD_3
+            self.count_higher_bet+=1
+        elif self.shoe.truecount() == 4:
+            self.stake = BET_SPREAD_4
+            self.count_higher_bet+=1
+        elif self.shoe.truecount() == 5:
+            self.stake = BET_SPREAD_5
+            self.count_higher_bet+=1
+        elif self.shoe.truecount() == 6:
+            self.stake = BET_SPREAD_6
+            self.count_higher_bet+=1
+        elif self.shoe.truecount() > 6:
             self.stake = BET_SPREAD
             self.count_higher_bet+=1
         else:
@@ -835,7 +1006,8 @@ if __name__ == "__main__":
     STRATEGY=sys.argv[2]
     simulation=sys.argv[3]
     HARD_STRATEGY, SOFT_STRATEGY, PAIR_STRATEGY = importer.import_player_strategy()
-
+    DATABASE = Database("./database/bj_simulation_database.sqlite")
+    
     moneys = []
     bets = []
     countings = []
@@ -868,7 +1040,7 @@ if __name__ == "__main__":
         elif max_win<accumulate_win:
             max_win=accumulate_win
 
-        print("WIN for Game no. %d: %s (%s bet) (%s accumulate win) (%s times higher bets)" % (g + 1, "{0:.2f}".format(game.get_money()), "{0:.2f}".format(game.get_bet()), accumulate_win, count_higher_bet))
+        print("WIN for Game no. %d: %s (%s bet) (%s accumulate win) (%s times higher bets) (%s find chances in database)" % (g + 1, "{0:.2f}".format(game.get_money()), "{0:.2f}".format(game.get_bet()), accumulate_win, count_higher_bet, str(DATABASE.count_database_searchs)))
 
     sume = 0.0
     total_bet = 0.0

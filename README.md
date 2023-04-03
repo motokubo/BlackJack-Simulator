@@ -5,7 +5,9 @@ Flexible BlackJack-Simulator written in Python. It takes a given basic strategy 
 
 ### Running
 
-    python BlackJack.py strategy/BasicStrategy.csv
+    python BlackJack.py strategy/BasicStrategyNoSr.csv 1 1
+    python BlackJack.py strategy/BasicStrategyNoSr.csv CalculatePercentage 1
+    python BlackJack.py strategy/BasicStrategyNoSr.csv CalculatePercentage simulation
 
 Omega II Count:
 
