@@ -1,0 +1,6 @@
+
+747487 hands overall, 37.37 hands per game on average
+1367940.00 total bet
+Overall winnings: 8238.00 (edge = 0.602 %)
+-436.50 max drawdown
+8506.00 max win
